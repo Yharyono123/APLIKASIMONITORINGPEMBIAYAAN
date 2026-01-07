@@ -1,2 +1,584 @@
-Project URL : https://xakuojnxfcqlzpwcuadb.supabase.co
-API KEY : sb_publishable_H_3cxw2D9jYFZLuhVWrntw_I5lUe55N
+
+import React, { useState, useMemo, useEffect } from 'react';
+import { 
+  LayoutDashboard, Users, AlertTriangle, TrendingUp, Menu, X, Search, 
+  Download, BrainCircuit, ChevronRight, Filter, ShieldCheck, Building2, 
+  Calendar, Wallet, Plus, Trash2, Database, RefreshCw, BarChart3, MapPin, Target,
+  Briefcase, ShoppingBag, Activity
+} from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  AreaChart, Area, PieChart, Pie, Cell, Legend, LineChart, Line
+} from 'recharts';
+import { MOCK_ACCOUNTS, MOCK_TRENDS, YEARLY_DROPPING } from './mockData';
+import { getPortfolioInsights } from './geminiService';
+import { FinancingAccount, FinancingProduct, Collectibility, FinancingSegment } from './types';
+
+const COLORS = ['#065f46', '#059669', '#10b981', '#fbbf24', '#f59e0b', '#d97706'];
+
+const formatCurrency = (val: number) => {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0
+  }).format(val);
+};
+
+export default function App() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'portfolio' | 'marketing' | 'analysis'>('dashboard');
+  const [activeSegment, setActiveSegment] = useState<'Semua' | FinancingSegment>('Semua');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Local Storage
+  const [accounts, setAccounts] = useState<FinancingAccount[]>(() => {
+    const saved = localStorage.getItem('hik_portfolio_v3');
+    return saved ? JSON.parse(saved) : MOCK_ACCOUNTS;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('hik_portfolio_v3', JSON.stringify(accounts));
+  }, [accounts]);
+
+  // Derived Filtered Data
+  const filteredBySegment = useMemo(() => {
+    return accounts.filter(a => activeSegment === 'Semua' || a.segment === activeSegment);
+  }, [accounts, activeSegment]);
+
+  const filteredBySearch = useMemo(() => {
+    return filteredBySegment.filter(a => 
+      a.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      a.marketingName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [filteredBySegment, searchTerm]);
+
+  // Dynamic Stats
+  const stats = useMemo(() => {
+    const totalOutstanding = filteredBySegment.reduce((s, a) => s + a.outstanding, 0);
+    const totalDropping = filteredBySegment.reduce((s, a) => s + a.amount, 0);
+    const npfAmt = filteredBySegment.filter(a => ['Kurang Lancar', 'Diragukan', 'Macet'].includes(a.collectibility)).reduce((s, a) => s + a.outstanding, 0);
+    return {
+      totalOutstanding,
+      totalDropping,
+      npfRatio: totalOutstanding > 0 ? (npfAmt / totalOutstanding) * 100 : 0,
+      count: filteredBySegment.length
+    };
+  }, [filteredBySegment]);
+
+  // Daily Dropping Data for Chart
+  const dailyDroppingData = useMemo(() => {
+    const daily: Record<string, number> = {};
+    filteredBySegment.forEach(acc => {
+      const day = acc.startDate.split('-')[2]; // Extract DD
+      daily[day] = (daily[day] || 0) + acc.amount;
+    });
+    return Object.entries(daily)
+      .map(([day, total]) => ({ day: `Tgl ${day}`, amount: total }))
+      .sort((a, b) => a.day.localeCompare(b.day));
+  }, [filteredBySegment]);
+
+  const marketingPerformance = useMemo(() => {
+    const perf: Record<string, { dropping: number, count: number, npf: number, outstanding: number }> = {};
+    filteredBySegment.forEach(acc => {
+      if (!perf[acc.marketingName]) perf[acc.marketingName] = { dropping: 0, count: 0, npf: 0, outstanding: 0 };
+      perf[acc.marketingName].dropping += acc.amount;
+      perf[acc.marketingName].outstanding += acc.outstanding;
+      perf[acc.marketingName].count += 1;
+      if (['Kurang Lancar', 'Diragukan', 'Macet'].includes(acc.collectibility)) {
+        perf[acc.marketingName].npf += acc.outstanding;
+      }
+    });
+    return Object.entries(perf).map(([name, data]) => ({
+      name,
+      ...data,
+      npfRatio: data.outstanding > 0 ? (data.npf / data.outstanding) * 100 : 0
+    })).sort((a, b) => b.dropping - a.dropping);
+  }, [filteredBySegment]);
+
+  const branchData = useMemo(() => {
+    const branches: Record<string, number> = {};
+    filteredBySegment.forEach(acc => {
+      branches[acc.branch] = (branches[acc.branch] || 0) + acc.outstanding;
+    });
+    return Object.entries(branches).map(([name, value]) => ({ name, value }));
+  }, [filteredBySegment]);
+
+  const handleAiAnalyze = async () => {
+    setIsAiLoading(true);
+    const promptSummary = `
+      Analisis Portofolio BPRS HIK (Segmen: ${activeSegment}):
+      Outstanding: ${formatCurrency(stats.totalOutstanding)}
+      Dropping: ${formatCurrency(stats.totalDropping)}
+      NPF: ${stats.npfRatio.toFixed(2)}%
+      NOA: ${stats.count}
+      Marketing Terburuk NPF: ${marketingPerformance.sort((a,b) => b.npfRatio - a.npfRatio)[0]?.name || '-'}
+    `;
+    const result = await getPortfolioInsights(promptSummary);
+    setAiAnalysis(result);
+    setIsAiLoading(false);
+  };
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900">
+      {/* Sidebar */}
+      <aside className={`${isSidebarOpen ? 'w-72' : 'w-20'} transition-all duration-300 emerald-gradient text-white flex flex-col shadow-2xl z-30`}>
+        <div className="p-6 flex items-center gap-4 border-b border-white/10">
+          <div className="bg-amber-500 p-2 rounded-lg shadow-inner flex items-center justify-center">
+            <Building2 size={20} className="text-emerald-900" />
+          </div>
+          {isSidebarOpen && <span className="font-bold text-lg tracking-tight">BPRS HIK Monitor</span>}
+        </div>
+        
+        <nav className="flex-1 mt-6 px-3 space-y-1">
+          <NavItem icon={<LayoutDashboard size={20} />} label="Overview" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} isOpen={isSidebarOpen} />
+          <NavItem icon={<Wallet size={20} />} label="Dropping & Sisa" active={activeTab === 'portfolio'} onClick={() => setActiveTab('portfolio')} isOpen={isSidebarOpen} />
+          <NavItem icon={<Target size={20} />} label="Marketing & AO" active={activeTab === 'marketing'} onClick={() => setActiveTab('marketing')} isOpen={isSidebarOpen} />
+          <NavItem icon={<BarChart3 size={20} />} label="Analisis Tren" active={activeTab === 'analysis'} onClick={() => setActiveTab('analysis')} isOpen={isSidebarOpen} />
+        </nav>
+
+        <div className="p-4 space-y-2 border-t border-white/10">
+          <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full flex items-center gap-3 p-3 hover:bg-white/10 rounded-xl transition-all text-xs text-emerald-200">
+            <RefreshCw size={14} /> {isSidebarOpen && "Clear & Reset"}
+          </button>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="w-full flex justify-center p-3 hover:bg-white/10 rounded-xl transition-all">
+            {isSidebarOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto custom-scrollbar">
+        <header className="sticky top-0 z-20 glass border-b border-slate-200 px-8 py-4 flex flex-col gap-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-bold text-slate-800 tracking-tight">Portfolio Monitoring System</h1>
+              <div className="flex items-center gap-2">
+                 <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <Activity size={10} /> Live Monitoring V4.0
+                </p>
+                <div className="h-1 w-1 rounded-full bg-slate-300"></div>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Segmen: {activeSegment}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                <input 
+                  type="text" 
+                  placeholder="Cari nasabah atau AO..." 
+                  className="pl-9 pr-4 py-2 bg-slate-100 border-none rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 w-64 outline-none transition-all"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <button onClick={() => setIsModalOpen(true)} className="bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-emerald-900/10 transition-all active:scale-95">
+                <Plus size={18} /> New Dropping
+              </button>
+            </div>
+          </div>
+
+          <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl w-fit">
+            <SegmentTab active={activeSegment === 'Semua'} onClick={() => setActiveSegment('Semua')} label="Semua" icon={<LayoutDashboard size={14} />} />
+            <SegmentTab active={activeSegment === 'Retail'} onClick={() => setActiveSegment('Retail')} label="Retail" icon={<ShoppingBag size={14} />} />
+            <SegmentTab active={activeSegment === 'Komersial'} onClick={() => setActiveSegment('Komersial')} label="Komersial" icon={<Briefcase size={14} />} />
+          </div>
+        </header>
+
+        <div className="p-8 space-y-8 pb-20">
+          {activeTab === 'dashboard' && (
+            <>
+              {/* Summary Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <MiniStat title="Total Outstanding" value={formatCurrency(stats.totalOutstanding)} icon={<Wallet className="text-emerald-600" />} />
+                <MiniStat title="Dropping Periode" value={formatCurrency(stats.totalDropping)} icon={<TrendingUp className="text-blue-600" />} />
+                <MiniStat title="Rasio NPF" value={`${stats.npfRatio.toFixed(2)}%`} icon={<AlertTriangle className="text-rose-600" />} />
+                <MiniStat title="Total NOA" value={stats.count.toString()} icon={<Users className="text-amber-600" />} />
+              </div>
+
+              {/* Daily and Marketing Charts Row */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Daily Dropping Chart */}
+                <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                  <div className="flex justify-between items-center mb-8">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Grafik Dropping Harian</h3>
+                      <p className="text-[10px] text-slate-400">Total pencairan dana berdasarkan tanggal start date</p>
+                    </div>
+                    <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-bold">Bulan Ini</div>
+                  </div>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={dailyDroppingData}>
+                        <defs>
+                          <linearGradient id="colorDaily" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748b'}} />
+                        <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748b'}} tickFormatter={(v) => `${v/1e6}jt`} />
+                        <Tooltip 
+                          formatter={(v: any) => [formatCurrency(v), 'Total Dropping']}
+                          contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                        />
+                        <Area type="monotone" dataKey="amount" stroke="#10b981" strokeWidth={3} fill="url(#colorDaily)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* NPF per Marketing Chart */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                  <div className="mb-8">
+                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Rasio NPF per AO</h3>
+                    <p className="text-[10px] text-slate-400">Perbandingan kualitas kredit tiap marketing</p>
+                  </div>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart layout="vertical" data={marketingPerformance} margin={{left: 20}}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                        <XAxis type="number" axisLine={false} tickLine={false} tick={{fontSize: 10}} hide />
+                        <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 'bold'}} width={80} />
+                        <Tooltip formatter={(v: any) => [`${v.toFixed(2)}%`, 'NPF Ratio']} />
+                        <Bar dataKey="npfRatio" radius={[0, 4, 4, 0]}>
+                          {marketingPerformance.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.npfRatio > 5 ? '#ef4444' : entry.npfRatio > 2 ? '#f59e0b' : '#10b981'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
+              {/* Secondary Dashboard Row */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Portfolio Mix Chart */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                   <h3 className="text-sm font-bold text-slate-500 mb-6 uppercase tracking-wider">Komposisi Cabang</h3>
+                   <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={branchData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                          {branchData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(v: any) => formatCurrency(v)} />
+                        <Legend iconType="circle" wrapperStyle={{fontSize: '10px', paddingTop: '20px'}} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                   </div>
+                </div>
+
+                {/* AI Analysis Card */}
+                <div className="bg-emerald-950 rounded-[2.5rem] p-10 flex flex-col md:flex-row gap-8 items-center relative overflow-hidden shadow-2xl">
+                  <div className="absolute top-0 right-0 opacity-10 pointer-events-none -translate-y-1/4 translate-x-1/4">
+                    <BrainCircuit size={400} className="text-white" />
+                  </div>
+                  <div className="flex-1 space-y-5 relative z-10">
+                    <div className="inline-flex items-center gap-2 bg-amber-500/20 text-amber-400 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-amber-500/30">
+                      <ShieldCheck size={12} /> AI Auditor Active
+                    </div>
+                    <h2 className="text-3xl font-bold text-white leading-tight">Insight Strategis Segmen {activeSegment}</h2>
+                    <p className="text-emerald-100/60 text-sm leading-relaxed">Analisis mendalam mengenai performa harian dan risiko per AO untuk BPRS Harta Insan Karimah.</p>
+                    <button onClick={handleAiAnalyze} disabled={isAiLoading} className="bg-amber-500 hover:bg-amber-600 text-emerald-950 px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50 active:scale-95 shadow-xl shadow-amber-900/40">
+                      {isAiLoading ? "Processing Insight..." : "Run AI Analysis"}
+                    </button>
+                  </div>
+                  {aiAnalysis && (
+                    <div className="flex-1 bg-white/5 backdrop-blur-xl p-6 rounded-3xl border border-white/10 text-emerald-50 text-[11px] leading-relaxed max-h-72 overflow-y-auto relative z-10 custom-scrollbar shadow-inner">
+                      <p className="whitespace-pre-wrap">{aiAnalysis}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'marketing' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="p-8 border-b border-slate-50 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-3">
+                  <Target size={24} className="text-emerald-700" /> Profil Produktivitas & Kualitas AO
+                </h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest">
+                    <tr>
+                      <th className="px-8 py-5">Account Officer</th>
+                      <th className="px-8 py-5 text-right">Volume Dropping</th>
+                      <th className="px-8 py-5 text-right">Total Outstanding</th>
+                      <th className="px-8 py-5 text-center">Jumlah NOA</th>
+                      <th className="px-8 py-5 text-center">NPF Ratio</th>
+                      <th className="px-8 py-5">Risk Rating</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {marketingPerformance.map((ao, i) => (
+                      <tr key={i} className="hover:bg-slate-50/50 transition-all group">
+                        <td className="px-8 py-6 font-bold text-slate-800 flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs text-slate-400 group-hover:bg-emerald-100 group-hover:text-emerald-700 transition-colors">
+                            {ao.name.charAt(0)}
+                          </div>
+                          {ao.name}
+                        </td>
+                        <td className="px-8 py-6 text-right font-medium text-emerald-700">{formatCurrency(ao.dropping)}</td>
+                        <td className="px-8 py-6 text-right font-medium text-slate-600">{formatCurrency(ao.outstanding)}</td>
+                        <td className="px-8 py-6 text-center font-bold text-slate-500">{ao.count}</td>
+                        <td className="px-8 py-6 text-center font-black text-rose-600">{ao.npfRatio.toFixed(2)}%</td>
+                        <td className="px-8 py-6">
+                          <div className={`inline-flex px-3 py-1 rounded-full text-[10px] font-black border uppercase tracking-wider ${
+                            ao.npfRatio < 2 ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 
+                            ao.npfRatio < 5 ? 'bg-amber-100 text-amber-800 border-amber-200' : 
+                            'bg-rose-100 text-rose-800 border-rose-200'
+                          }`}>
+                            {ao.npfRatio < 2 ? 'Low Risk' : ao.npfRatio < 5 ? 'Medium Risk' : 'High Risk'}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'portfolio' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+                <h3 className="text-lg font-bold text-slate-800">Direktori Pembiayaan {activeSegment}</h3>
+                <div className="flex gap-2">
+                  <span className="text-[10px] bg-emerald-100 px-4 py-1.5 rounded-xl text-emerald-800 font-black uppercase tracking-widest">{filteredBySearch.length} Aktif NOA</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-400 text-[9px] uppercase font-bold tracking-[0.2em] border-b border-slate-100">
+                    <tr>
+                      <th className="px-8 py-5">Detail Nasabah</th>
+                      <th className="px-8 py-5">Info Akad</th>
+                      <th className="px-8 py-5 text-right">Dropping</th>
+                      <th className="px-8 py-5 text-right">Outstanding</th>
+                      <th className="px-8 py-5 text-center">Status Kol</th>
+                      <th className="px-8 py-5 text-center">Opsi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {filteredBySearch.map((acc) => (
+                      <tr key={acc.id} className="group hover:bg-slate-50 transition-all">
+                        <td className="px-8 py-6">
+                          <div className="font-bold text-slate-800 text-sm tracking-tight">{acc.customerName}</div>
+                          <div className={`text-[9px] font-black uppercase mt-1 tracking-wider ${acc.segment === 'Komersial' ? 'text-blue-600' : 'text-emerald-600'}`}>
+                            {acc.segment} • {acc.branch}
+                          </div>
+                        </td>
+                        <td className="px-8 py-6">
+                          <div className="text-xs font-semibold text-slate-700">{acc.product}</div>
+                          <div className="text-[10px] text-slate-400">Marketing: {acc.marketingName}</div>
+                        </td>
+                        <td className="px-8 py-6 text-right font-medium text-slate-500 text-xs">{formatCurrency(acc.amount)}</td>
+                        <td className="px-8 py-6 text-right font-bold text-slate-900 text-sm">{formatCurrency(acc.outstanding)}</td>
+                        <td className="px-8 py-6 text-center"><ColTag status={acc.collectibility} /></td>
+                        <td className="px-8 py-6 text-center">
+                          <button onClick={() => setAccounts(prev => prev.filter(a => a.id !== acc.id))} className="p-2.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all">
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'analysis' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                <div className="mb-8">
+                  <h3 className="text-lg font-bold text-slate-800 uppercase tracking-tight">Kualitas Portofolio Historis</h3>
+                  <p className="text-xs text-slate-400">Pergerakan rasio NPF dalam 5 bulan terakhir</p>
+                </div>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={MOCK_TRENDS}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fontSize: 10}} />
+                      <YAxis hide />
+                      <Tooltip 
+                         contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                         formatter={(v) => [`${v}%`, 'NPF Ratio']}
+                      />
+                      <Line type="monotone" dataKey="npf" stroke="#ef4444" strokeWidth={4} dot={{r: 6, fill: '#ef4444', strokeWidth: 0}} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="bg-slate-900 p-10 rounded-[3rem] text-white flex flex-col justify-center items-center text-center shadow-2xl relative overflow-hidden">
+                 <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
+                    <div className="absolute top-10 left-10 w-20 h-20 bg-emerald-500 rounded-full blur-3xl"></div>
+                    <div className="absolute bottom-10 right-10 w-32 h-32 bg-amber-500 rounded-full blur-3xl"></div>
+                 </div>
+                 <ShieldCheck size={56} className="text-emerald-400 mb-6 relative z-10" />
+                 <h3 className="text-2xl font-bold relative z-10">Data Integrity Guaranteed</h3>
+                 <p className="text-slate-400 text-sm mt-4 max-w-sm leading-relaxed relative z-10">Seluruh data BPRS Harta Insan Karimah diproses secara lokal di perangkat Anda untuk memastikan kepatuhan terhadap regulasi kerahasiaan bank.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Modal Input Dropping */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-md animate-fade-in">
+          <div className="bg-white w-full max-w-2xl rounded-[3rem] shadow-2xl overflow-hidden p-12 relative">
+            <button onClick={() => setIsModalOpen(false)} className="absolute top-10 right-10 text-slate-400 hover:text-slate-800 transition-colors p-2 hover:bg-slate-100 rounded-full"><X size={24} /></button>
+            <h2 className="text-3xl font-bold text-slate-800 mb-2 tracking-tight">Pencatatan Realisasi</h2>
+            <p className="text-slate-400 text-sm mb-10">Masukkan data dropping baru untuk pemutakhiran portofolio.</p>
+            
+            <form className="grid grid-cols-2 gap-8" onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const newAcc: FinancingAccount = {
+                id: `F${Date.now().toString().slice(-4)}`,
+                customerName: formData.get('name') as string,
+                product: formData.get('product') as FinancingProduct,
+                segment: formData.get('segment') as FinancingSegment,
+                amount: Number(formData.get('amount')),
+                outstanding: Number(formData.get('amount')),
+                tenor: Number(formData.get('tenor')),
+                startDate: new Date().toISOString().split('T')[0],
+                collectibility: 'Lancar',
+                sector: formData.get('sector') as string,
+                location: 'Nasional',
+                branch: formData.get('branch') as string,
+                marketingName: formData.get('marketing') as string
+              };
+              setAccounts(prev => [newAcc, ...prev]);
+              setIsModalOpen(false);
+            }}>
+              <div className="col-span-2 space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Pilih Segmen</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="flex items-center gap-3 p-4 border-2 rounded-2xl cursor-pointer hover:bg-emerald-50 hover:border-emerald-200 transition-all has-[:checked]:border-emerald-600 has-[:checked]:bg-emerald-50">
+                    <input type="radio" name="segment" value="Retail" defaultChecked className="hidden" />
+                    <ShoppingBag size={18} className="text-emerald-600" />
+                    <span className="text-sm font-bold text-slate-700">Retail</span>
+                  </label>
+                  <label className="flex items-center gap-3 p-4 border-2 rounded-2xl cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-all has-[:checked]:border-blue-600 has-[:checked]:bg-blue-50">
+                    <input type="radio" name="segment" value="Komersial" className="hidden" />
+                    <Briefcase size={18} className="text-blue-600" />
+                    <span className="text-sm font-bold text-slate-700">Komersial</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="col-span-2 space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Nama Nasabah / Debitur</label>
+                <input name="name" required placeholder="Contoh: PT Harapan Insan" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none transition-all" />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Account Officer</label>
+                <input name="marketing" required placeholder="Nama AO" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm focus:border-emerald-500 outline-none transition-all" />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Kantor Cabang</label>
+                <select name="branch" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm focus:border-emerald-500 outline-none transition-all appearance-none">
+                  <option>Kantor Pusat</option>
+                  <option>Cabang Depok</option>
+                  <option>Cabang Bogor</option>
+                  <option>Cabang Bekasi</option>
+                  <option>Cabang Tangerang</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Nilai Dropping (IDR)</label>
+                <input name="amount" type="number" required placeholder="0" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm font-bold text-emerald-700 focus:border-emerald-500 outline-none" />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Akad Pembiayaan</label>
+                <select name="product" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm focus:border-emerald-500 outline-none transition-all appearance-none">
+                  <option>Murabahah</option>
+                  <option>Musyarakah</option>
+                  <option>Mudharabah</option>
+                  <option>Ijarah</option>
+                  <option>Qardh</option>
+                </select>
+              </div>
+
+              <button type="submit" className="col-span-2 bg-emerald-700 hover:bg-emerald-800 text-white py-5 rounded-[1.5rem] font-black text-xs uppercase tracking-[0.3em] mt-6 shadow-2xl shadow-emerald-900/30 active:scale-[0.98] transition-all">
+                Submit Transaksi Baru
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SegmentTab({ active, onClick, label, icon }: any) {
+  return (
+    <button 
+      onClick={onClick}
+      className={`px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2.5 transition-all active:scale-95 ${
+        active ? 'bg-white text-emerald-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+      }`}
+    >
+      <span className={active ? 'text-emerald-600' : 'text-slate-400'}>{icon}</span>
+      {label}
+    </button>
+  );
+}
+
+function NavItem({ icon, label, active, onClick, isOpen }: any) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all relative group ${
+      active ? 'bg-white/10 text-white shadow-xl' : 'text-emerald-100/50 hover:text-white hover:bg-white/5'
+    }`}>
+      {active && <div className="absolute left-0 top-4 bottom-4 w-1.5 bg-amber-400 rounded-full" />}
+      <div className={`transition-transform duration-300 ${active ? 'text-amber-400 scale-110' : 'group-hover:scale-110'}`}>
+        {icon}
+      </div>
+      {isOpen && <span className="text-sm font-bold tracking-tight">{label}</span>}
+    </button>
+  );
+}
+
+function MiniStat({ title, value, icon }: any) {
+  return (
+    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-5 transition-all hover:shadow-lg hover:-translate-y-1">
+      <div className="p-4 bg-slate-50 rounded-[1.25rem] group-hover:bg-emerald-50 transition-colors">
+        {/* Fix: cast icon to React.ReactElement<any> to allow dynamic prop injection (like 'size') via cloneElement without TS errors. */}
+        {React.cloneElement(icon as React.ReactElement<any>, { size: 24 })}
+      </div>
+      <div>
+        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{title}</p>
+        <p className="text-lg font-black text-slate-800 leading-none tracking-tight">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function ColTag({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    'Lancar': 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    'DPK': 'bg-amber-50 text-amber-700 border-amber-100',
+    'Kurang Lancar': 'bg-orange-50 text-orange-700 border-orange-100',
+    'Diragukan': 'bg-slate-100 text-slate-700 border-slate-200',
+    'Macet': 'bg-rose-50 text-rose-700 border-rose-100'
+  };
+  return (
+    <span className={`${styles[status] || 'bg-gray-100'} px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border`}>
+      {status}
+    </span>
+  );
+}
